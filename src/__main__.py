@@ -3,11 +3,20 @@ import traceback
 
 import pandas
 from elasticsearch import Elasticsearch
+from elasticsearch_dsl import Search
 
 from src.configuration import Config
 
 
 class ElasticExporter:
+
+    CSV_HEADERS = 'source_record_id|record_id|applicant|project_type|address|postcode|city|state|latitude|longitude|' \
+                  'pin|department_id|project_brief|project_name|zoning_classification_pre|zoning_classification_post|' \
+                  'status|date|applicant_contact|record_link|document_link|contact_phone_number|contact_email|' \
+                  'contact_website|parcel_number|block|lot|owner|authority|owner_address|owner_phone|source'
+
+    ROW_MASK = '{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|' \
+               '{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}'
 
     def __init__(self):
         self.config = Config()
@@ -15,53 +24,27 @@ class ElasticExporter:
         self.total_docs = 1000
         self.es = Elasticsearch(['http://' + self.config.es_user + ':' + self.config.es_pass + '@' + self.config.es_host + ':' + self.config.es_port])
 
-    def fetch_csv(self):
-        """
-        MAKE API CALL TO CLUSTER AND CONVERT
-        THE RESPONSE OBJECT TO A LIST OF
-        ELASTICSEARCH DOCUMENTS
-        """
-        print("\nmaking API call to Elasticsearch for", self.total_docs, "documents.")
-        response = self.es.search(
-            index=self.config.index,
-            body={},
-            size=self.total_docs
-        )
+    def fetch_csv(self, index):
 
-        # grab list of docs from nested dictionary response
-        print("putting documents in a list")
-        elastic_docs = response["hits"]["hits"]
+        hits = Search().using(client=self.es).index(index).query()
 
-        print(elastic_docs)
+        time.sleep(30)
 
-        """
-        GET ALL OF THE ELASTICSEARCH
-        INDEX'S FIELDS FROM _SOURCE
-        """
-        #  create an empty Pandas DataFrame object for docs
-        docs = pandas.DataFrame()
+        with open("output/{}.csv".format(index), "a") as output_file:
+            output_file.write(self.CSV_HEADERS)
 
-        # iterate each Elasticsearch doc in list
-        print("\ncreating objects from Elasticsearch data.")
-        for num, doc in enumerate(elastic_docs):
-            # get _source data dict from document
-            source_data = doc["_source"]
+            for hit in hits.scan():
+                row = self.ROW_MASK.format(hit.id, hit.record_id, hit.applicant, hit.project_type, hit.address, hit.postcode,
+                                           hit.city, hit.state, hit.latitude, hit.longitude, hit.pin, hit.department_id,
+                                           hit.project_brief, hit.project_name, hit.zoning_classification_pre,
+                                           hit.zoning_classification_post, hit.status, hit.date, hit.applicant_contact,
+                                           hit.record_link, hit.document_link, hit.contact_phone_number, hit.contact_email,
+                                           hit.contact_website, hit.parcel_number, hit.block, hit.lot, hit.owner, hit.authority,
+                                           hit.owner_address, hit.owner_phone, hit.source)
 
-            # get _id from document
-            _id = doc["_id"]
+                output_file.write(row)
 
-            # create a Series object from doc dict object
-            doc_data = pandas.Series(source_data, name=_id)
-
-            # append the Series object to the DataFrame object
-            docs = docs.append(doc_data)
-
-        print("\nexporting Pandas objects to CSV Format")
-
-        # export Elasticsearch documents to a CSV file
-        docs.to_csv("csv_out.csv", "|", index_label=False)  # CSV delimited by pipe
-
-        print("\n\ntime elapsed:", time.time() - self.start_time)
+            output_file.close()
 
     def write_s3(self):
         pass
@@ -70,8 +53,11 @@ class ElasticExporter:
 def main():
     elastic_exporter = ElasticExporter()
     try:
-        elastic_exporter.fetch_csv()
-        elastic_exporter.write_s3()
+        index = ['au_zoning_data', 'us_zoning_data']
+
+        for indx in index:
+            elastic_exporter.fetch_csv(indx)
+
     except Exception as e:
         traceback.print_exc()
         pass
